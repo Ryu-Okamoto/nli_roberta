@@ -334,7 +334,12 @@ def compute_metrics(p: EvalPrediction):
             p.predictions
     preds = numpy.argmax(preds, axis=1)
     acc = accuracy_score(p.label_ids, preds)
-    precision, recall, f1, _ = precision_recall_fscore_support(p.label_ids, preds, average='macro')
+    precision, recall, f1, _ = precision_recall_fscore_support(
+              y_true=p.label_ids
+            , y_pred=preds
+            , average='macro'
+            , zero_division=0.0
+        )
     return {
         'accuracy': acc,
         'precision': precision,
