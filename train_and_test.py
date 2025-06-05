@@ -1,3 +1,6 @@
+# train and test NLI model whose base-model is RoBERTa-large
+# ref: https://github.com/huggingface/transformers/blob/main/examples/pytorch/text-classification/run_classification.py
+
 import os
 from dataclasses import dataclass
 from typing import Any
@@ -37,6 +40,7 @@ class NLIDatasetInfo:
     test_splits: List[str]
 
 
+# see: https://huggingface.co/datasets/stanfordnlp/snli
 SNLI_INFO = NLIDatasetInfo(
           name='SNLI'
         , hf_path='stanfordnlp/snli'
@@ -53,6 +57,7 @@ SNLI_INFO = NLIDatasetInfo(
         , test_splits=['test']
     )
 
+# see: https://huggingface.co/datasets/nyu-mll/multi_nli
 MNLI_INFO = NLIDatasetInfo(
           name='MNLI'
         , hf_path='nyu-mll/multi_nli'
@@ -69,6 +74,7 @@ MNLI_INFO = NLIDatasetInfo(
         , test_splits=[]
     )
 
+# see: https://huggingface.co/datasets/facebook/anli
 ANLI_INFO = NLIDatasetInfo(
           name='ANLI'
         , hf_path='facebook/anli'
@@ -97,7 +103,7 @@ def main():
 
     ## model setup
     tokenizer, model = load_pretrained_model(
-              pretrained_model_name='roberta-base'
+              pretrained_model_name='roberta-large'
             , classlabel_list=['entailment', 'neutral', 'contradiction']
         )
 
@@ -149,10 +155,11 @@ def main():
     test(ANLI_INFO, tokenizer, model)
     
     ## test on each dataset
-    # test_results = []
-    # test_results.append(test(SNLI_INFO, tokenizer, model))
-    # test_results.append(test(MNLI_INFO, tokenizer, model))
-    # test_results.append(test(ANLI_INFO, tokenizer, model))
+    test_results = []
+    test_results.append(test(SNLI_INFO, tokenizer, model))
+    test_results.append(test(MNLI_INFO, tokenizer, model))
+    test_results.append(test(ANLI_INFO, tokenizer, model))
+    print(test_results)
 
 
 #######################################################################################################
@@ -206,7 +213,7 @@ def train(
     dataset_train, dataset_eval, _ = split_dataset(nli_dataset_info, dataset)
 
     def _tokenize(batch):
-        return tokenize_premises_and_hypotheses(nli_dataset_info, batch, tokenizer)
+        return tokenize_pre_and_hypo(nli_dataset_info, batch, tokenizer)
 
     def _filter(batch):
         return are_labels_available(nli_dataset_info, batch)
@@ -265,7 +272,7 @@ def test(
     _, _, dataset_test = split_dataset(nli_dataset_info, dataset, only_test=True)
 
     def _tokenize(batch):
-        return tokenize_premises_and_hypotheses(nli_dataset_info, batch, tokenizer)
+        return tokenize_pre_and_hypo(nli_dataset_info, batch, tokenizer)
 
     def _filter(batch):
         return are_labels_available(nli_dataset_info, batch)
@@ -306,7 +313,7 @@ def split_dataset(
     return dataset_train, dataset_eval, dataset_test
 
 
-def tokenize_premises_and_hypotheses(
+def tokenize_pre_and_hypo(
       nli_dataset_info: NLIDatasetInfo
     , batch: Dict[str, List]
     , tokenizer: PreTrainedTokenizer 
