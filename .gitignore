@@ -1,5 +1,6 @@
 venv
 
-.checkpoints
-.datasets
-.model
+.checkpoints*
+.dataset*
+.model*
+.output*
