@@ -101,59 +101,38 @@ OUTPUT_DIR = '.output'
 
 def main():
 
-    ## model setup
     tokenizer, model = load_pretrained_model(
               pretrained_model_name='roberta-large'
             , classlabel_list=['entailment', 'neutral', 'contradiction']
         )
 
-    ## configure training
-    use_mixed_precision = True and torch.cuda.is_available()
-    training_args = TrainingArguments(
-              output_dir='tmp_output/'          # reset after
-            , overwrite_output_dir=True         # to overwrite the output directory
-            , do_train=True
-            , do_eval=True
-            , eval_strategy='epoch'             # to evaluate every epoch
-            , save_strategy='epoch'             # to save the model every epoch
-            , logging_strategy='epoch'          # to log every epoch
-            , learning_rate=1e-5                # equivalent to DocNLI
-            , weight_decay=1e-2                 # to regularize
-            , num_train_epochs=5                # equivalent to DocNLI
-            , per_device_train_batch_size=16
-            , gradient_accumulation_steps=2     # batch_size ~ this * per_device_train_epoch_batch_size
-            , per_device_eval_batch_size=16
-            , fp16=use_mixed_precision          # to use mixed precision training
-            , load_best_model_at_end=True       # to select best model checkpoint(epoch) for next trainee
-            , metric_for_best_model='accuracy'  # metric to determine best model checkpoint
-        )
+    results_after_training = []
+    for nli_dataset_info in [SNLI_INFO, MNLI_INFO, ANLI_INFO]:
+        output_dir = os.path.join(OUTPUT_DIR, nli_dataset_info.name)
+        training_args = TrainingArguments(
+                  output_dir=output_dir
+                , overwrite_output_dir=True         # to overwrite the output directory
+                , do_train=True
+                , do_eval=True
+                , eval_strategy='epoch'             # to evaluate every epoch
+                , save_strategy='epoch'             # to save the model every epoch
+                , logging_strategy='epoch'          # to log every epoch
+                , learning_rate=1e-5                # equivalent to DocNLI
+                , weight_decay=1e-2                 # to regularize
+                , num_train_epochs=5                # equivalent to DocNLI
+                , per_device_train_batch_size=16
+                , gradient_accumulation_steps=2     # batch_size ~ this * per_device_train_epoch_batch_size
+                , per_device_eval_batch_size=16
+                , fp16=torch.cuda.is_available()    # to use mixed precision training
+                , load_best_model_at_end=True       # to select best model checkpoint(epoch) for next trainee
+                , metric_for_best_model='accuracy'  # metric to determine best model checkpoint
+            )
+        
+        tokenizer, model = train(nli_dataset_info, tokenizer, model, training_args)
+        results = test(nli_dataset_info, tokenizer, model)
+        results_after_training.append(results)
 
-    ## train on each dataset
-    tokenizer_1, model_1 = train(
-              nli_dataset_info=SNLI_INFO
-            , tokenizer=tokenizer
-            , model=model
-            , training_args=training_args
-        )
-    tokenizer_2, model_2 = train(
-              nli_dataset_info=MNLI_INFO
-            , tokenizer=tokenizer_1
-            , model=model_1
-            , training_args=training_args
-        )
-    tokenizer_3, model_3 = train(
-              nli_dataset_info=ANLI_INFO
-            , tokenizer=tokenizer_2
-            , model=model_2
-            , training_args=training_args
-        )
-    
-    ## test on each dataset
-    test_results = []
-    test_results.append(test(SNLI_INFO, tokenizer_3, model_3))
-    test_results.append(test(MNLI_INFO, tokenizer_3, model_3))
-    test_results.append(test(ANLI_INFO, tokenizer_3, model_3))
-    print(test_results)
+    print(results_after_training)
 
 
 #######################################################################################################
@@ -210,7 +189,6 @@ def train(
     dataset_eval = preprocess_dataset(nli_dataset_info, dataset_eval, tokenizer)
 
     data_collator = DataCollatorWithPadding(tokenizer)
-    training_args.output_dir = os.path.join(OUTPUT_DIR, nli_dataset_info.name)
     trainer = Trainer(
               model=model
             , args=training_args
@@ -257,10 +235,12 @@ def test(
 
     dataset_test = preprocess_dataset(nli_dataset_info, dataset_test, tokenizer)
 
+    data_collator = DataCollatorWithPadding(tokenizer)
     trainer = Trainer(
               model=model
             , compute_metrics=compute_metrics
             , processing_class=tokenizer
+            , data_collator=data_collator
         )
 
     print(f'Running test on {nli_dataset_info.name}...')
@@ -330,7 +310,7 @@ def compute_metrics(p: EvalPrediction):
     preds = p.predictions[0] if isinstance(p.predictions, tuple) else \
             p.predictions
     preds = numpy.argmax(preds, axis=1)
-    acc = accuracy_score(p.label_ids, preds)
+    accuracy = accuracy_score(p.label_ids, preds)
     precision, recall, f1, _ = precision_recall_fscore_support(
               y_true=p.label_ids
             , y_pred=preds
@@ -338,7 +318,7 @@ def compute_metrics(p: EvalPrediction):
             , zero_division=0.0
         )
     return {
-        'accuracy': acc,
+        'accuracy': accuracy,
         'precision': precision,
         'recall': recall,
         'f1': f1
