@@ -110,7 +110,7 @@ def main():
     ## configure training
     use_mixed_precision = True and torch.cuda.is_available()
     training_args = TrainingArguments(
-              output_dir='tmp_output/'          # set after
+              output_dir='tmp_output/'          # reset after
             , overwrite_output_dir=True         # to overwrite the output directory
             , do_train=True
             , do_eval=True
@@ -119,46 +119,40 @@ def main():
             , logging_strategy='epoch'          # to log every epoch
             , learning_rate=1e-5                # equivalent to DocNLI
             , weight_decay=1e-2                 # to regularize
-            , num_train_epochs=5.0              # equivalent to DocNLI
+            , num_train_epochs=5                # equivalent to DocNLI
             , per_device_train_batch_size=16
             , gradient_accumulation_steps=2     # batch_size ~ this * per_device_train_epoch_batch_size
             , per_device_eval_batch_size=16
             , fp16=use_mixed_precision          # to use mixed precision training
+            , load_best_model_at_end=True       # to select best model checkpoint(epoch) for next trainee
+            , metric_for_best_model='accuracy'  # metric to determine best model checkpoint
         )
 
     ## train on each dataset
-    test(SNLI_INFO, tokenizer, model)
-    tokenizer, model = train(
+    tokenizer_1, model_1 = train(
               nli_dataset_info=SNLI_INFO
             , tokenizer=tokenizer
             , model=model
             , training_args=training_args
         )
-    test(SNLI_INFO, tokenizer, model)
-
-    test(MNLI_INFO, tokenizer, model)
-    tokenizer, model = train(
+    tokenizer_2, model_2 = train(
               nli_dataset_info=MNLI_INFO
-            , tokenizer=tokenizer
-            , model=model
+            , tokenizer=tokenizer_1
+            , model=model_1
             , training_args=training_args
         )
-    test(MNLI_INFO, tokenizer, model)
-
-    test(ANLI_INFO, tokenizer, model)
-    tokenizer, model = train(
+    tokenizer_3, model_3 = train(
               nli_dataset_info=ANLI_INFO
-            , tokenizer=tokenizer
-            , model=model
+            , tokenizer=tokenizer_2
+            , model=model_2
             , training_args=training_args
         )
-    test(ANLI_INFO, tokenizer, model)
     
     ## test on each dataset
     test_results = []
-    test_results.append(test(SNLI_INFO, tokenizer, model))
-    test_results.append(test(MNLI_INFO, tokenizer, model))
-    test_results.append(test(ANLI_INFO, tokenizer, model))
+    test_results.append(test(SNLI_INFO, tokenizer_3, model_3))
+    test_results.append(test(MNLI_INFO, tokenizer_3, model_3))
+    test_results.append(test(ANLI_INFO, tokenizer_3, model_3))
     print(test_results)
 
 
