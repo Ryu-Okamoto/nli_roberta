@@ -110,7 +110,7 @@ def main():
     ## configure training
     use_mixed_precision = True and torch.cuda.is_available()
     training_args = TrainingArguments(
-              output_dir=None                   # set after
+              output_dir='tmp_output/'          # set after
             , overwrite_output_dir=True         # to overwrite the output directory
             , do_train=True
             , do_eval=True
@@ -119,10 +119,10 @@ def main():
             , logging_strategy='epoch'          # to log every epoch
             , learning_rate=1e-5                # equivalent to DocNLI
             , weight_decay=1e-2                 # to regularize
-            , num_train_epochs=5.0              # equivalent to 2 * DocNLI
-            , per_device_train_batch_size=32
-            , gradient_accumulation_steps=1     # batch_size ~ this * per_device_train_epoch_batch_size
-            , per_device_eval_batch_size=32
+            , num_train_epochs=5.0              # equivalent to DocNLI
+            , per_device_train_batch_size=16
+            , gradient_accumulation_steps=2     # batch_size ~ this * per_device_train_epoch_batch_size
+            , per_device_eval_batch_size=16
             , fp16=use_mixed_precision          # to use mixed precision training
         )
 
@@ -212,18 +212,8 @@ def train(
     dataset = load_dataset(nli_dataset_info.hf_path, cache_dir=DATASET_CACHE_DIR)
     dataset_train, dataset_eval, _ = split_dataset(nli_dataset_info, dataset)
 
-    def _tokenize(batch):
-        return tokenize_pre_and_hypo(nli_dataset_info, batch, tokenizer)
-
-    def _filter(batch):
-        return are_labels_available(nli_dataset_info, batch)
-
-    dataset_train = dataset_train \
-                    .map(_tokenize, batched=True, num_proc=4) \
-                    .filter(_filter, batched=True, num_proc=4)
-    dataset_eval = dataset_eval \
-                    .map(_tokenize, batched=True, num_proc=4) \
-                    .filter(_filter, batched=True, num_proc=4)
+    dataset_train = preprocess_dataset(nli_dataset_info, dataset_train, tokenizer)
+    dataset_eval = preprocess_dataset(nli_dataset_info, dataset_eval, tokenizer)
 
     data_collator = DataCollatorWithPadding(tokenizer)
     training_args.output_dir = os.path.join(OUTPUT_DIR, nli_dataset_info.name)
@@ -271,15 +261,7 @@ def test(
     dataset = load_dataset(nli_dataset_info.hf_path, cache_dir=DATASET_CACHE_DIR)
     _, _, dataset_test = split_dataset(nli_dataset_info, dataset, only_test=True)
 
-    def _tokenize(batch):
-        return tokenize_pre_and_hypo(nli_dataset_info, batch, tokenizer)
-
-    def _filter(batch):
-        return are_labels_available(nli_dataset_info, batch)
-
-    dataset_test = dataset_test \
-                    .map(_tokenize, batched=True, num_proc=4) \
-                    .filter(_filter, batched=True, num_proc=4)
+    dataset_test = preprocess_dataset(nli_dataset_info, dataset_test, tokenizer)
 
     trainer = Trainer(
               model=model
@@ -313,6 +295,20 @@ def split_dataset(
     return dataset_train, dataset_eval, dataset_test
 
 
+def preprocess_dataset(
+      nli_dataset_info: NLIDatasetInfo
+    , dataset: DatasetDict
+    , tokenizer: PreTrainedTokenizer
+) \
+    -> DatasetDict:
+
+    tokenize_batch = lambda batch: tokenize_pre_and_hypo(nli_dataset_info, batch, tokenizer)
+    filter_batch = lambda batch: filter_labels_available(nli_dataset_info, batch)
+
+    return dataset.map(tokenize_batch, batched=True, num_proc=4) \
+                  .filter(filter_batch, batched=True, num_proc=4)
+
+
 def tokenize_pre_and_hypo(
       nli_dataset_info: NLIDatasetInfo
     , batch: Dict[str, List]
@@ -329,7 +325,7 @@ def tokenize_pre_and_hypo(
         )
 
 
-def are_labels_available(
+def filter_labels_available(
       nli_dataset_info: NLIDatasetInfo
     , batch: Dict[str, list]
 ):
