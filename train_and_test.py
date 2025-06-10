@@ -1,8 +1,11 @@
 # train and test NLI model whose base-model is RoBERTa-large
 # ref: https://github.com/huggingface/transformers/blob/main/examples/pytorch/text-classification/run_classification.py
 
+import json
 import os
+from argparse import ArgumentParser
 from dataclasses import dataclass
+from dataclasses import field
 from typing import Any
 from typing import Dict
 from typing import List
@@ -95,44 +98,55 @@ DATASET_CACHE_DIR = '.dataset'
 MODEL_CACHE_DIR = '.model'
 OUTPUT_DIR = '.output'
 
+CLASSLABEL_LIST = [
+      'entailment'     # 0
+    , 'neutral'        # 1
+    , 'contradiction'  # 2
+]
+
 
 #######################################################################################################
 
 
-def main():
+def main(do_train: bool = False):
 
-    tokenizer, model = load_pretrained_model(
-              pretrained_model_name='roberta-large'
-            , classlabel_list=['entailment', 'neutral', 'contradiction']
-        )
+    tokenizer, model = load_pretrained_model('roberta-large', CLASSLABEL_LIST)
 
-    results_after_training = []
+    if do_train:
+        results_after_training = []
+        for nli_dataset_info in [SNLI_INFO, MNLI_INFO, ANLI_INFO]:
+            output_dir = os.path.join(OUTPUT_DIR, nli_dataset_info.name)
+            training_args = TrainingArguments(
+                      output_dir=output_dir
+                    , overwrite_output_dir=True         # to overwrite the output directory
+                    , do_train=True
+                    , do_eval=True
+                    , eval_strategy='epoch'             # to evaluate every epoch
+                    , save_strategy='epoch'             # to save the model every epoch
+                    , logging_strategy='epoch'          # to log every epoch
+                    , learning_rate=1e-5                # equivalent to DocNLI
+                    , weight_decay=1e-2                 # to regularize
+                    , num_train_epochs=10               # equivalent to 2 * DocNLI
+                    , per_device_train_batch_size=16
+                    , gradient_accumulation_steps=2     # batch_size ~ this * per_device_train_epoch_batch_size
+                    , per_device_eval_batch_size=16
+                    , fp16=torch.cuda.is_available()    # to use mixed precision training
+                    , load_best_model_at_end=True       # to select best model checkpoint(epoch) for next trainee
+                    , metric_for_best_model='accuracy'  # metric to determine best model checkpoint
+                )
+            
+            tokenizer, model = train(nli_dataset_info, tokenizer, model, training_args)
+            results = test(nli_dataset_info, tokenizer, model)
+            results_after_training.append(results)
+        print(results_after_training)
+
+
+    save_dir = os.path.join(OUTPUT_DIR + '_epoch=10', 'ANLI', 'save')
+    tokenizer = AutoTokenizer.from_pretrained(save_dir)
+    model = AutoModelForSequenceClassification.from_pretrained(save_dir)
+
     for nli_dataset_info in [SNLI_INFO, MNLI_INFO, ANLI_INFO]:
-        output_dir = os.path.join(OUTPUT_DIR, nli_dataset_info.name)
-        training_args = TrainingArguments(
-                  output_dir=output_dir
-                , overwrite_output_dir=True         # to overwrite the output directory
-                , do_train=True
-                , do_eval=True
-                , eval_strategy='epoch'             # to evaluate every epoch
-                , save_strategy='epoch'             # to save the model every epoch
-                , logging_strategy='epoch'          # to log every epoch
-                , learning_rate=1e-5                # equivalent to DocNLI
-                , weight_decay=1e-2                 # to regularize
-                , num_train_epochs=5                # equivalent to DocNLI
-                , per_device_train_batch_size=16
-                , gradient_accumulation_steps=2     # batch_size ~ this * per_device_train_epoch_batch_size
-                , per_device_eval_batch_size=16
-                , fp16=torch.cuda.is_available()    # to use mixed precision training
-                , load_best_model_at_end=True       # to select best model checkpoint(epoch) for next trainee
-                , metric_for_best_model='accuracy'  # metric to determine best model checkpoint
-            )
-        
-        tokenizer, model = train(nli_dataset_info, tokenizer, model, training_args)
-        results = test(nli_dataset_info, tokenizer, model)
-        results_after_training.append(results)
-
-    print(results_after_training)
+        test(nli_dataset_info, tokenizer, model)
 
 
 #######################################################################################################
@@ -142,7 +156,7 @@ def load_pretrained_model(
       pretrained_model_name: str
     , classlabel_list: list[Any]
 ) \
-    -> tuple[PreTrainedTokenizer, PreTrainedModel]:
+    -> Tuple[PreTrainedTokenizer, PreTrainedModel]:
 
     label2id = { v: i for i, v in enumerate(classlabel_list) }
     id2label = { v: k for k, v in label2id.items() }
@@ -223,17 +237,11 @@ def test(
     , tokenizer: PreTrainedTokenizer
     , model: PreTrainedModel
 ) \
-    -> Tuple[Dict[str, Dict[str, float]]]:
+    -> Tuple[Dict[str, Dict[str, Dict[str, float]]]]:
 
-    if nli_dataset_info.test_splits == []:
-        print('Skip testing on {}.'.format(nli_dataset_info.name))
-        return {}
-
-    print('Prepare test set for {}...'.format(nli_dataset_info.name))
+    print('Prepare dataset for {}...'.format(nli_dataset_info.name))
     dataset = load_dataset(nli_dataset_info.hf_path, cache_dir=DATASET_CACHE_DIR)
-    _, _, dataset_test = split_dataset(nli_dataset_info, dataset, only_test=True)
-
-    dataset_test = preprocess_dataset(nli_dataset_info, dataset_test, tokenizer)
+    _, dataset_eval, dataset_test = split_dataset(nli_dataset_info, dataset)
 
     data_collator = DataCollatorWithPadding(tokenizer)
     trainer = Trainer(
@@ -243,11 +251,34 @@ def test(
             , data_collator=data_collator
         )
 
-    print(f'Running test on {nli_dataset_info.name}...')
-    metrics = trainer.evaluate(eval_dataset=dataset_test)
-    print(f"Test results on {nli_dataset_info.name}: {metrics}")
+    print('Running prediction on {}...'.format(nli_dataset_info.name))
+    metrics_eval = {}
+    metrics_test = {}    
+    if dataset_eval:
+        dataset_eval = preprocess_dataset(nli_dataset_info, dataset_eval, tokenizer)
+        metrics_eval = trainer.evaluate(eval_dataset=dataset_eval)
+    else:
+        print('Skipped eval.')
     
-    return { nli_dataset_info.name: metrics }
+    if dataset_test:
+        dataset_test = preprocess_dataset(nli_dataset_info, dataset_test, tokenizer)
+        metrics_test = trainer.evaluate(eval_dataset=dataset_test)
+    else:
+        print('Skipped test.')
+
+    results = \
+        { 
+            nli_dataset_info.name: 
+                { 
+                    'eval': metrics_eval, 
+                    'test': metrics_test 
+                }
+        }
+
+    print('Results on {}:'.format(nli_dataset_info.name))
+    print(json.dumps(results, indent=4))
+    
+    return results
 
 
 #######################################################################################################
@@ -256,16 +287,15 @@ def test(
 def split_dataset(
       nli_dataset_info: NLIDatasetInfo
     , dataset: DatasetDict
-    , only_test: bool = False
 ) \
     -> Tuple[Dataset, Dataset, Dataset]:
 
     dataset_train = concatenate_datasets([dataset[split] for split in nli_dataset_info.train_splits]) \
-                    if nli_dataset_info.train_splits != [] and not only_test else None
+                    if nli_dataset_info.train_splits != [] else None
     dataset_eval = concatenate_datasets([dataset[split] for split in nli_dataset_info.eval_splits]) \
-                    if nli_dataset_info.eval_splits != [] and not only_test else None
+                    if nli_dataset_info.eval_splits != [] else None
     dataset_test = concatenate_datasets([dataset[split] for split in nli_dataset_info.test_splits]) \
-                    if nli_dataset_info.test_splits != [] and only_test else None
+                    if nli_dataset_info.test_splits != [] else None
     return dataset_train, dataset_eval, dataset_test
 
 
@@ -329,4 +359,12 @@ def compute_metrics(p: EvalPrediction):
 
 
 if __name__ == '__main__':
-    main()
+    parser = ArgumentParser()
+    parser.add_argument(
+              '--do_train'
+            , action='store_true'
+            , help='set this flag to train the model. '
+                   'if not set, the training step will be skipped'
+        )
+    args = parser.parse_args()
+    main(args._get_args)
